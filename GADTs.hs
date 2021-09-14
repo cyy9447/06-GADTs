@@ -1,20 +1,21 @@
 -- Allow data to be used in types
-{-# LANGUAGE DataKinds #-}
+{-# LANGUAGE DataKinds           #-}
 -- Constrain datatypes via indices
-{-# LANGUAGE GADTs #-}
+{-# LANGUAGE GADTs               #-}
 -- Allow kind annotations on types
-{-# LANGUAGE KindSignatures #-}
+{-# LANGUAGE KindSignatures      #-}
 -- Bind polymorphic type variables
 {-# LANGUAGE ScopedTypeVariables #-}
 -- Use 'Type' instead of '*' in kinds
-{-# LANGUAGE NoStarIsType #-}
+{-# LANGUAGE NoStarIsType        #-}
 {-# OPTIONS_GHC -Wincomplete-patterns #-}
 {-# OPTIONS_GHC -Wno-unticked-promoted-constructors #-}
 
 module GADTs where
 
-import Data.Kind (Type)
-import Test.HUnit
+import           Data.Kind  (Type)
+import           Data.Maybe (fromMaybe)
+import           Test.HUnit
 
 data OExp
   = OInt Int -- a number constant, like '2'
@@ -38,13 +39,15 @@ oevaluate (OBool b) = Just (Right b)
 oevaluate (OAdd e1 e2) =
   case (oevaluate e1, oevaluate e2) of
     (Just (Left i1), Just (Left i2)) -> Just (Left (i1 + i2))
-    _ -> Nothing
+    _                                -> Nothing
 oevaluate (OIsZero e1) =
   case oevaluate e1 of
     Just (Left x) -> if x == 0 then Just (Right True) else Just (Right False)
-    _ -> Nothing
+    _             -> Nothing
 oevaluate (OIf e1 e2 e3) =
-  undefined
+  case oevaluate e1 of
+    Just (Right b) -> if b then oevaluate e2 else oevaluate e3
+    _              -> Nothing
 
 oe1_example :: Maybe (Either Int Bool)
 oe1_example = oevaluate oe1
@@ -92,9 +95,11 @@ evaluate (GInt i) = i
 evaluate (GBool b) = b
 evaluate (GAdd e1 e2) = evaluate e1 + evaluate e2
 evaluate (GIsZero e1) =
-  undefined
+  case evaluate e1 of
+    0 -> True
+    _ -> False
 evaluate (GIf e1 e2 e3) =
-  undefined
+  if evaluate e1 then evaluate e2 else evaluate e3
 
 data T (a :: Type -> Type) = MkT (a Int)
 
@@ -112,8 +117,8 @@ exUF = MkU
 data Flag = Empty | NonEmpty
 
 data List :: Flag -> Type -> Type where
-  Nil :: List Empty a
-  Cons :: a -> List f a -> List NonEmpty a
+  Nil :: List 'Empty a
+  Cons :: a -> List f a -> List 'NonEmpty a
 
 ex0 :: List 'Empty Int
 ex0 = Nil
@@ -127,24 +132,51 @@ safeHd (Cons h _) = h
 --unsafeHd :: [a] -> a
 --unsafeHd (x : _) = x
 
-foldr' :: (a -> b -> b) -> b -> List f a -> b
-foldr' = undefined
+foldr' :: forall a b f. (a -> b -> b) -> b -> List f a -> b
+foldr' f z = go
+  where
+    go :: forall f'. List f' a -> b
+    go Nil         = z
+    go (Cons x xs) = f x (go xs)
 
-foldr1' :: (a -> a -> a) -> List NonEmpty a -> a
-foldr1' = undefined
+foldr1' :: forall a. (a -> a -> a) -> List NonEmpty a -> a
+foldr1' f = go
+  where
+    go :: List NonEmpty a -> a
+    go (Cons x Nil)         = x
+    go (Cons x (Cons y ys)) = f x (go (Cons y ys))
 
-map' :: (a -> b) -> List f a -> List f b
-map' = undefined
+map' :: forall a b f. (a -> b) -> List f a -> List f b
+map' f = go
+  where
+    go :: forall f'. List f' a -> List f' b
+    go Nil         = Nil
+    go (Cons x xs) = Cons (f x) (go xs)
 
 -- filter' :: (a -> Bool) -> List f a -> List f a
 
 -- filter' :: (a -> Bool) -> List f a -> List f' a
 
-data OldList a where
+data (OldList a) :: Type where
   OL :: List f a -> OldList a
 
 isNonempty :: OldList a -> Maybe (List NonEmpty a)
-isNonempty = undefined
+isNonempty (OL Nil)           = Nothing
+isNonempty (OL xs@(Cons _ _)) = Just xs
 
-filter' :: (a -> Bool) -> List f a -> OldList a
-filter' = undefined
+filter' :: forall a f. (a -> Bool) -> List f a -> OldList a
+filter' p = go
+  where
+    go :: forall f'. List f' a -> OldList a
+    go Nil = OL Nil
+    go (Cons x xs)
+      | not . p $ x = go xs
+      | otherwise =
+          case isNonempty (go xs) of
+            Nothing -> OL (Cons x Nil)
+            Just xs -> OL (Cons x xs)
+
+
+-- silly :: forall f. Bool -> List f ()
+-- silly False = Nil
+-- silly True  = Cons () Nil
